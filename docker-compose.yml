@@ -1,0 +1,112 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: cybertech-postgres
+    environment:
+      POSTGRES_USER: cybertech
+      POSTGRES_PASSWORD: cybertech_pass
+      POSTGRES_DB: cybertech_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cybertech"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: cybertech-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Elasticsearch for logging
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.10.0
+    container_name: cybertech-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+    ports:
+      - "9200:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200 >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # IAM Service
+  iam-service:
+    build:
+      context: ./services/iam
+      dockerfile: Dockerfile
+    container_name: cybertech-iam
+    ports:
+      - "5001:5001"
+    environment:
+      - FLASK_ENV=production
+      - JWT_SECRET_KEY=cybertech-jwt-secret-change-in-prod
+      - DATABASE_URL=postgresql://cybertech:cybertech_pass@postgres:5432/cybertech_db
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Threat Detection Service
+  threat-service:
+    build:
+      context: ./services/threat-detection
+      dockerfile: Dockerfile
+    container_name: cybertech-threat
+    ports:
+      - "5002:5002"
+    environment:
+      - FLASK_ENV=production
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5002/api/v1/threats/analyze"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # React Frontend (optional - for development)
+  # frontend:
+  #   build:
+  #     context: ./frontend
+  #     dockerfile: Dockerfile
+  #   container_name: cybertech-frontend
+  #   ports:
+  #     - "5173:5173"
+  #   environment:
+  #     - VITE_IAM_BASE_URL=http://iam-service:5001
+  #     - VITE_THREAT_BASE_URL=http://threat-service:5002/api/v1/threats
+  #   depends_on:
+  #     - iam-service
+  #     - threat-service
+
+volumes:
+  postgres_data:
+
+networks:
+  default:
+    name: cybertech-network
